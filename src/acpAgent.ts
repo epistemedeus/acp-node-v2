@@ -742,18 +742,17 @@ export class AcpAgent {
     chainId: number,
     offering: AcpAgentOffering,
     providerAddress: string,
-    requirementData: Record<string, unknown> | string,
+    requirementData: unknown,
     opts?: {
       evaluatorAddress?: string;
       hookAddress?: string;
       packageId?: number;
     },
   ): Promise<JobId> {
-    // Validate requirement data against JSON schema if requirements is an object.
+    // The declared schema decides which payload types are valid.
     if (
       offering.requirements &&
-      typeof offering.requirements === "object" &&
-      typeof requirementData === "object"
+      typeof offering.requirements === "object"
     ) {
       const ajv = new Ajv({ allErrors: true, strictSchema: false });
       addFormats(ajv);
@@ -835,7 +834,7 @@ export class AcpAgent {
     chainId: number,
     offeringName: string,
     providerAddress: string,
-    requirementData: Record<string, unknown> | string,
+    requirementData: unknown,
     opts?: {
       evaluatorAddress?: string;
       hookAddress?: string;
