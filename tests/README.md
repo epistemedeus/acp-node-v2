@@ -53,3 +53,20 @@ stringified objects and other primitives against an object schema, skipped
 scalar constraints, invalid schemas paired with strings, and the corresponding
 creation/recovery boundaries on both public entry points. Null and array object
 schema rejections already worked and remain covered.
+
+## JSON transport preflight
+
+The requirement is serialized once before job creation. Unsupported top-level
+values and serialization failures therefore cannot leave an orphan creation.
+The supplied value and its parsed JSON representation must both satisfy the
+declared schema; this does not parse a caller's JSON-looking string into an
+object or mutate the caller's value. A changing or throwing toJSON cannot
+bypass validation or change the posted content on retry. Retrying a message is
+not proof of idempotent server handling; these tests establish stable content,
+not delivery uniqueness or live settlement.
+
+The full suite now passes91/91. The14 transport controls fail against the first
+input-type correction, which otherwise passes77/77. The unchanged original
+77-test harness independently gives55passes/22failures against392dcc6e.
+The positive expiry assertion brackets the invocation window to avoid a
+second-boundary clock race. No dependency or lockfile change is involved.

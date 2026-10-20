@@ -81,6 +81,7 @@ async function setup(t, requirements = objectSchema, overrides = {}) {
     assert.equal(url, `${HOST}/chats/${CHAIN}/123/message`);
     assert.equal(method, 'POST');
     assert.equal(calls.sends.length, 1, 'requirement follows creation');
+    if (calls.loseFirstMessageReply && calls.http.filter(c => c.url.endsWith('/message')).length === 1) throw Error('offline lost message reply');
     return new Response(null, { status: 200 });
   });
   const agent = await AcpAgent.create({
@@ -90,7 +91,7 @@ async function setup(t, requirements = objectSchema, overrides = {}) {
   const client = agent.getClient(CHAIN);
   const create = client.createJob.bind(client);
   t.mock.method(client, 'createJob', (...args) => { calls.prepares++; return create(...args); });
-  return { agent, offering, calls };
+  return { agent, offering, calls, startedAtSec: Math.floor(Date.now() / 1000) };
 }
 
 const entryPoints = {
@@ -121,7 +122,8 @@ function assertCreated(h, data, { evaluator = getNoEvaluatorAddress(CHAIN), hook
   assert.equal(actualEvaluator.toLowerCase(), evaluator.toLowerCase());
   assert.equal(description, h.offering.name);
   assert.equal(actualHook.toLowerCase(), hook.toLowerCase());
-  assert.ok(expiration >= BigInt(Math.floor(Date.now() / 1000) + 5 * 60));
+  assert.ok(expiration >= BigInt(h.startedAtSec + 5 * 60 + 30));
+  assert.ok(expiration <= BigInt(Math.floor(Date.now() / 1000) + 5 * 60 + 30));
   const messages = h.calls.http.filter(c => c.url.endsWith('/message'));
   assert.equal(messages.length, 1);
   assert.deepEqual(JSON.parse(messages[0].body), { content: JSON.stringify(data), contentType: 'requirement', ...(packageId ? { packageId } : {}) });
@@ -221,3 +223,40 @@ test('raw createJob remains independent of offering validation and sends no requ
   assert.deepEqual(h.calls.http, []);
   assert.deepEqual(h.calls.authSigns, []);
 });
+
+// The exact posted representation must remain valid, available before effects,
+// and stable across a lost transport response. These are offline sentinels.
+for (const [entry, invoke] of Object.entries(entryPoints)) {
+  for (const [name, makeData] of [
+    ['bigint', () => 1n],
+    ['cyclic object', () => { const v = {}; v.self = v; return v; }],
+    ['undefined', () => undefined],
+    ['symbol', () => Symbol('unsupported')],
+    ['function', () => () => 'unsupported'],
+  ]) test(entry + ': unserializable ' + name + ' cannot create a job', async t => {
+    const h = await setup(t, {});
+    await assert.rejects(invoke(h, makeData()));
+    assertNoCreation(h, entry);
+  });
+
+  test(entry + ': serialized payload must satisfy the same declared schema', async t => {
+    const h = await setup(t, { ...objectSchema, additionalProperties: true });
+    const data = { ...valid, toJSON() { return { url: 'not a uri', count: '1' }; } };
+    await assert.rejects(invoke(h, data), /Requirement validation failed:/);
+    assertNoCreation(h, entry);
+  });
+
+  test(entry + ': one serialization is retained across a lost message response', async t => {
+    const h = await setup(t, { ...objectSchema, additionalProperties: true });
+    h.calls.loseFirstMessageReply = true;
+    let serializations = 0;
+    const data = { ...valid, toJSON() { serializations++; return { ...valid, count: serializations }; } };
+    assert.equal(await invoke(h, data), 123n);
+    assert.equal(serializations, 1);
+    assert.equal(h.calls.sends.length, 1);
+    const messages = h.calls.http.filter(c => c.url.endsWith('/message'));
+    assert.equal(messages.length, 2);
+    assert.equal(messages[0].body, messages[1].body);
+    assert.deepEqual(JSON.parse(messages[0].body), { content: JSON.stringify(valid), contentType: 'requirement' });
+  });
+}
